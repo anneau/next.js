@@ -2210,6 +2210,9 @@ export default abstract class Server<
         setCacheBustingSearchParamWithHash(url, expectedHash)
         res.statusCode = 307
         res.setHeader('location', `${url.pathname}${url.search}`)
+        // `setVaryHeader` runs after this early return, so there's no Vary to
+        // key on and a stored copy would be replayed for a document request.
+        res.setHeader('cache-control', 'private, no-store')
         res.body('').send()
         return null
       }

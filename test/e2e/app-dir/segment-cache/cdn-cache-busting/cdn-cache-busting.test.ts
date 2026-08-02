@@ -2,7 +2,7 @@ import type * as Playwright from 'playwright'
 import type { ChildProcess } from 'child_process'
 import type { Server } from 'http'
 import { createRouterAct } from 'router-act'
-import { findPort } from 'next-test-utils'
+import { findPort, retry } from 'next-test-utils'
 import { isNextDeploy, isNextDev, nextTestSetup } from 'e2e-utils'
 import { createFakeCDN } from './server.mjs'
 
@@ -29,10 +29,12 @@ describe('segment cache (CDN cache busting)', () => {
   let nextExit: Promise<any> | undefined
   let cdnServer: Server
   let port: number
+  // The Next.js server itself, with no fake CDN in front of it.
+  let originPort: number
 
   beforeAll(async () => {
     await next.build()
-    const nextPort = await findPort()
+    const nextPort = (originPort = await findPort())
     const proxyPort = (port = await findPort())
 
     let resolveReady!: () => void
@@ -125,6 +127,79 @@ describe('segment cache (CDN cache busting)', () => {
       expect(redirected).toBe(true)
     }
   )
+
+  it('does not let the cache busting redirect be cached and served to a document request', async () => {
+    const url = `http://localhost:${port}/poison-target`
+
+    const rscRes = await fetch(url, {
+      headers: {
+        rsc: '1',
+        'next-router-prefetch': '1',
+        'next-router-segment-prefetch': '/_tree',
+      },
+      redirect: 'manual',
+    })
+    expect(rscRes.status).toBe(307)
+    expect(rscRes.headers.get('location')).toContain('_rsc')
+
+    // Without `no-store` the fake CDN stores that 307 under this URL and
+    // replays it here, even though this request carries no RSC headers.
+    const documentRes = await fetch(url)
+    expect(documentRes.status).toBe(200)
+    expect(documentRes.redirected).toBe(false)
+    expect(new URL(documentRes.url).search).toBe('')
+    expect(documentRes.headers.get('content-type')).toContain('text/html')
+    expect(await documentRes.text()).toContain(
+      '<div id="poison-target">Poison target</div>'
+    )
+
+    // Assert the header itself too, so this doesn't rest on the fake CDN's
+    // particular storage rules.
+    expect(rscRes.headers.get('cache-control')).toContain('no-store')
+  })
+
+  it('does not let a history navigation replay the cache busting redirect', async () => {
+    // Deliberately bypasses the fake CDN: the browser's own cache is enough,
+    // since back/forward navigations are served from it without revalidating.
+    const origin = `http://localhost:${originPort}`
+    const browser = await next.browser('/history-nav-target', {
+      baseUrl: originPort,
+    })
+
+    await browser.waitForElementByCss('#history-nav-target')
+
+    // Poison the cache: produce the redirect for the URL we're sitting on.
+    const redirect = await browser.eval(async () => {
+      const res = await fetch('/history-nav-target', {
+        headers: {
+          rsc: '1',
+          'next-router-prefetch': '1',
+          'next-router-segment-prefetch': '/_tree',
+        },
+      })
+      return { redirected: res.redirected, url: res.url }
+    })
+    expect(redirect.redirected).toBe(true)
+    expect(redirect.url).toContain('_rsc=')
+
+    // Wait for each page to settle so we never read mid-navigation.
+    await browser.get(`${origin}/history-nav-other`)
+    await browser.waitForElementByCss('#history-nav-other')
+
+    await browser.back()
+    await browser.waitForElementByCss('#history-nav-target')
+
+    await retry(async () => {
+      // `url()` reads from the page handle rather than evaluating in the
+      // document, so it can't race with the navigation committing.
+      const href: string = await browser.url()
+      expect(new URL(href).pathname).toBe('/history-nav-target')
+      expect(new URL(href).search).toBe('')
+    })
+    expect(await browser.elementById('history-nav-target').text()).toBe(
+      'History nav target'
+    )
+  })
 
   it('ignores invalid RSC header values when serving a document request', async () => {
     const url = new URL(`http://localhost:${port}/target-page`)
