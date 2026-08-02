@@ -155,6 +155,17 @@ describe('segment cache (CDN cache busting)', () => {
       '<div id="poison-target">Poison target</div>'
     )
 
+    // Same thing in a real browser, where following the redirect would be a
+    // top-level navigation: the page renders either way, but the address bar
+    // would be left with an internal search param.
+    const browser = await next.browser('/poison-target', { baseUrl: port })
+    expect(await browser.elementById('poison-target').text()).toBe(
+      'Poison target'
+    )
+    const browserUrl = new URL(await browser.url())
+    expect(browserUrl.pathname).toBe('/poison-target')
+    expect(browserUrl.search).toBe('')
+
     // A shared cache must not store the redirect in the first place, because
     // it depends on request headers the cache may not be keyed on.
     expect(rscRes.headers.get('cache-control')).toContain('no-store')
