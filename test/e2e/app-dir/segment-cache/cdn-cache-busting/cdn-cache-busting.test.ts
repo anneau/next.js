@@ -126,6 +126,40 @@ describe('segment cache (CDN cache busting)', () => {
     }
   )
 
+  it('does not let the cache busting redirect be cached and served to a document request', async () => {
+    // The redirect above is generated for a *request* that carried RSC headers.
+    // A CDN that ignores Vary keys it on the URL alone, so if the redirect is
+    // cacheable it can later be served to a plain document request for the same
+    // URL, sending the browser to a `_rsc` URL as a top-level navigation.
+    const url = `http://localhost:${port}/poison-target`
+
+    const rscRes = await fetch(url, {
+      headers: {
+        rsc: '1',
+        'next-router-prefetch': '1',
+        'next-router-segment-prefetch': '/_tree',
+      },
+      redirect: 'manual',
+    })
+    // Sanity check: this is the redirect we're worried about.
+    expect(rscRes.status).toBe(307)
+    expect(rscRes.headers.get('location')).toContain('_rsc')
+
+    // The document request must be unaffected by it.
+    const documentRes = await fetch(url)
+    expect(documentRes.status).toBe(200)
+    expect(documentRes.redirected).toBe(false)
+    expect(new URL(documentRes.url).search).toBe('')
+    expect(documentRes.headers.get('content-type')).toContain('text/html')
+    expect(await documentRes.text()).toContain(
+      '<div id="poison-target">Poison target</div>'
+    )
+
+    // A shared cache must not store the redirect in the first place, because
+    // it depends on request headers the cache may not be keyed on.
+    expect(rscRes.headers.get('cache-control')).toContain('no-store')
+  })
+
   it('ignores invalid RSC header values when serving a document request', async () => {
     const url = new URL(`http://localhost:${port}/target-page`)
     url.searchParams.set('test', 'invalid-rsc-header')

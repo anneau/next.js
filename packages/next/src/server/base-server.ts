@@ -2210,6 +2210,13 @@ export default abstract class Server<
         setCacheBustingSearchParamWithHash(url, expectedHash)
         res.statusCode = 307
         res.setHeader('location', `${url.pathname}${url.search}`)
+        // This redirect is only correct for a request that carried the RSC
+        // headers we just checked. A shared cache must not store it and later
+        // serve it to a document request for the same URL, which would send the
+        // browser to the `_rsc` URL as a top-level navigation. A Vary header
+        // wouldn't be enough here, since the caches this guards against are
+        // precisely the ones that ignore it.
+        res.setHeader('cache-control', 'private, no-store')
         res.body('').send()
         return null
       }

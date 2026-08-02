@@ -137,7 +137,14 @@ export async function createFakeCDN(destPort) {
       })
       return
     }
-    // If the response isn't cacheable, pipe it through to the client.
+    // If the response isn't cacheable, pipe it through to the client. We're
+    // handling the response ourselves, so the status and headers have to be
+    // forwarded explicitly.
+    res.writeHead(
+      proxyRes.statusCode || 200,
+      proxyRes.statusMessage,
+      proxyRes.headers
+    )
     proxyRes.pipe(res)
     return
   })
