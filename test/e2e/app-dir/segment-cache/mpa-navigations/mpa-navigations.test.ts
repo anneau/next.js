@@ -1,3 +1,4 @@
+import type * as Playwright from 'playwright'
 import { nextTestSetup } from 'e2e-utils'
 import { retry } from 'next-test-utils'
 
@@ -67,4 +68,70 @@ describe('segment cache (MPA navigations)', () => {
       })
     }
   )
+
+  it('does not trigger an MPA navigation when an abandoned navigation fails', async () => {
+    // Clicking a prefetched link commits the navigation immediately and leaves
+    // the dynamic request in flight. Going back abandons that navigation, but
+    // the request keeps running; when it fails it must not drag the user back
+    // to the page they navigated away from.
+    const docs: string[] = []
+    const browser = await next.browser('/', {
+      beforePageLoad(page: Playwright.Page) {
+        page.on('request', (r) => {
+          if (r.resourceType() === 'document') docs.push(r.url())
+        })
+        page.route('**/slow**', async (route) => {
+          const request = route.request()
+          const headers = request.headers()
+          const isPrefetch =
+            'next-router-prefetch' in headers ||
+            'next-router-segment-prefetch' in headers
+          if (
+            request.resourceType() !== 'document' &&
+            request.url().includes('_rsc') &&
+            !isPrefetch
+          ) {
+            // Fail the dynamic request, but only after the back navigation has
+            // had time to happen.
+            await new Promise((resolve) => setTimeout(resolve, 1500))
+            await route.abort('failed')
+            return
+          }
+          await route.continue()
+        })
+      },
+    })
+
+    // Set an expando on the html element so we can detect if the page
+    // gets unloaded.
+    const html = await browser.elementByCss('html')
+    await html.evaluate((el) => ((el as ElementWithExpando).__expando = true))
+
+    // Let the link prefetch, so that the navigation commits right away.
+    await browser.eval('new Promise((resolve) => setTimeout(resolve, 1000))')
+
+    const link = await browser.elementByCss(`a[href="/slow"]`)
+    await link.click()
+    await retry(async () => {
+      expect(await browser.url()).toContain('/slow')
+    })
+
+    await browser.back()
+    await retry(async () => {
+      expect(await browser.url()).not.toContain('/slow')
+    })
+
+    // Wait until well past the point where the abandoned request has failed.
+    await browser.eval('new Promise((resolve) => setTimeout(resolve, 3000))')
+
+    // The only document request should be the initial page load. The abandoned
+    // navigation must not have loaded its page.
+    expect(docs.filter((url) => new URL(url).pathname === '/slow')).toEqual([])
+
+    // And the page should never have been unloaded.
+    const htmlAfterNav = await browser.elementByCss('html')
+    expect(
+      await htmlAfterNav.evaluate((el) => (el as ElementWithExpando).__expando)
+    ).toBe(true)
+  })
 })

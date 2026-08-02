@@ -25,6 +25,18 @@ export function serverPatchReducer(
   const retryUrl = new URL(action.url, location.origin)
   const retrySeed = action.seed
   const navigateType = action.navigateType
+  if (action.previousTree !== state.tree) {
+    // There was another, more recent navigation since the once that
+    // mismatched — or the navigation was abandoned entirely, e.g. by a back
+    // navigation. Either way the retry no longer describes what's on screen,
+    // so we must not act on its URL: hard navigating to it would undo the
+    // navigation the user actually made. We can abort the retry, but we still
+    // need to refresh the page to evict any stale dynamic data.
+    //
+    // This is checked before the MPA case below, because that one is the most
+    // disruptive: it unloads the page.
+    return refreshReducer(state, { type: ACTION_REFRESH })
+  }
   if (retryMpa || retrySeed === null) {
     // If the server did not send back data during the mismatch, fall back to
     // an MPA navigation.
@@ -32,12 +44,6 @@ export function serverPatchReducer(
   }
   const currentUrl = new URL(state.canonicalUrl, location.origin)
   const currentRenderedSearch = state.renderedSearch
-  if (action.previousTree !== state.tree) {
-    // There was another, more recent navigation since the once that
-    // mismatched. We can abort the retry, but we still need to refresh the
-    // page to evict any stale dynamic data.
-    return refreshReducer(state, { type: ACTION_REFRESH })
-  }
   // There have been no new navigations since the mismatched one. Refresh,
   // using the tree we just received from the server.
   //

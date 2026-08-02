@@ -10,6 +10,13 @@ export default async function Page() {
       <p>
         <Link href="/foo">/foo</Link>
       </p>
+      <p>
+        This one <em>should not</em>, even if its request fails after the
+        navigation has been abandoned:
+      </p>
+      <p>
+        <Link href="/slow">/slow</Link>
+      </p>
     </>
   )
 }
