@@ -20,6 +20,7 @@ import {
 } from '../segment-cache/bfcache'
 import { decodeStageUntilBoundary } from './fetch-server-response'
 import { discoverKnownRoute } from '../segment-cache/optimistic-routes'
+import { stripFlightMarkerFromSearch } from '../../route-params'
 import type { NormalizedSearch } from '../segment-cache/cache-key'
 
 export interface InitialRouterStateParameters {
@@ -68,7 +69,14 @@ export function createInitialRouterState({
     // This is safe to do as canonicalUrl can't be rendered, it's only used to control the history updates in the useEffect further down in this file.
     location
       ? // window.location does not have the same type as URL but has all the fields createHrefFromUrl needs.
-        createHrefFromUrl(location)
+        createHrefFromUrl({
+          pathname: location.pathname,
+          // The flight marker is internal. If the document was loaded with one
+          // in its URL, it must not become the canonical URL, otherwise
+          // HistoryUpdater writes it back to the address bar.
+          search: stripFlightMarkerFromSearch(location.search),
+          hash: location.hash,
+        })
       : initialCanonicalUrl
 
   // Convert the initial FlightRouterState into the RouteTree type.

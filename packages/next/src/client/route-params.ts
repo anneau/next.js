@@ -29,7 +29,11 @@ export function getRenderedSearch(
   // the response will include a header that gives the rewritten search query.
   const rewrittenQuery = response.headers.get(NEXT_REWRITTEN_QUERY_HEADER)
   if (rewrittenQuery !== null) {
-    return (
+    // The rewritten query can still contain the flight marker: it's computed
+    // from the request URL, and for an external rewrite the marker is
+    // deliberately forwarded to the upstream server so it can validate the
+    // request headers.
+    return stripFlightMarkerFromSearch(
       rewrittenQuery === '' ? '' : '?' + rewrittenQuery
     ) as NormalizedSearch
   }
@@ -201,6 +205,32 @@ export function getCacheKeyForDynamicParam(
   } else {
     return paramValue.join('/')
   }
+}
+
+/**
+ * Removes the internal RSC cache-busting search param from a URL search string,
+ * e.g. `?foo=1&_rsc=abc123` → `?foo=1`. Accepts the search string with or
+ * without its leading `?`, and returns it with a leading `?`, or an empty
+ * string if nothing is left.
+ *
+ * This operates on the raw string rather than going through `URLSearchParams`,
+ * because that would re-serialize the query and rewrite e.g. `%20` to `+`. The
+ * difference is user-visible whenever the result reaches the canonical URL,
+ * which the router writes to the address bar.
+ */
+export function stripFlightMarkerFromSearch(search: string): string {
+  if (!search.includes(NEXT_RSC_UNION_QUERY)) {
+    return search
+  }
+  const rawQuery = search.startsWith('?') ? search.slice(1) : search
+  const pairs = rawQuery
+    .split('&')
+    .filter(
+      (pair) =>
+        pair !== NEXT_RSC_UNION_QUERY &&
+        !pair.startsWith(`${NEXT_RSC_UNION_QUERY}=`)
+    )
+  return pairs.length > 0 ? `?${pairs.join('&')}` : ''
 }
 
 export function urlToUrlWithoutFlightMarker(url: URL): URL {
